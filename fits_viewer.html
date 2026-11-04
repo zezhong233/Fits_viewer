@@ -567,12 +567,18 @@
       if (!Number.isFinite(value)) throw new Error("lyric 参数必须是有限数值。");
       if (Object.is(value, -0)) value = 0;
       const magnitude = Math.abs(value);
-      if (magnitude > 0 && (magnitude < 1e-4 || magnitude >= 1e6)) return value.toExponential(5);
+      if (magnitude > 0 && (magnitude < 1e-4 || magnitude >= 1e6)) return String(Number(value.toExponential(5)));
       return String(Number(value.toFixed(6)));
     }
 
+    function oneSignificant(value) {
+      if (!Number.isFinite(value)) throw new Error("lyric 参数必须是有限数值。");
+      return value === 0 ? 0 : Number(value.toPrecision(1));
+    }
+
     function lyricFitList(value, minimum, maximum, step) {
-      return `[${[value, minimum, maximum, step].map(formatLyricNumber).join(", ")}, 0]`;
+      const fields = [value, oneSignificant(minimum), oneSignificant(maximum), oneSignificant(step)];
+      return `[${fields.map(formatLyricNumber).join(", ")}, 0]`;
     }
 
     function makeLyricParameters({ deltaRA, deltaDec, re, n, pa, q, pixelScale, radiusArcsec }) {
@@ -583,15 +589,15 @@
         throw new Error("估计结果超出可生成 lyric 参数的范围。");
       }
       const centerStep = value => Math.abs(value) / 10 || 0.01;
-      const reMinimum = Math.min(re, Math.max(1e-6, 0.3 * pixelScale));
+      const reMinimum = Math.max(1e-6, Math.min(0.3 * pixelScale, 0.5 * re));
       const reMaximum = Math.max(radiusArcsec, 2 * re);
       return [
         `Pa3) ${lyricFitList(deltaRA, deltaRA - 0.4, deltaRA + 0.4, centerStep(deltaRA))}`,
         `Pa4) ${lyricFitList(deltaDec, deltaDec - 0.4, deltaDec + 0.4, centerStep(deltaDec))}`,
         `Pa5) ${lyricFitList(re, reMinimum, reMaximum, re / 10)}`,
-        `Pa6) ${lyricFitList(n, 0.2, 8, n / 10)}`,
-        `Pa7) ${lyricFitList(pa, -180, 180, Math.abs(pa) / 10 || 1)}`,
-        `Pa8) ${lyricFitList(q, Math.min(0.1, q), 1, q / 10)}`
+        `Pa6) ${lyricFitList(n, 0.2, 6, n / 10)}`,
+        `Pa7) ${lyricFitList(pa, -180, 180, 1)}`,
+        `Pa8) ${lyricFitList(q, Math.min(0.1, 0.5 * q), 1, q / 10)}`
       ].join("\n");
     }
 
