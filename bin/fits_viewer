@@ -1,0 +1,20 @@
+#!/bin/sh
+set -eu
+project_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+launcher="${FITS_VIEWER_LAUNCHER:-}"
+if [ -z "$launcher" ]; then
+  if [ -f "$project_dir/fits_viewer_launcher.py" ]; then
+    launcher="$project_dir/fits_viewer_launcher.py"
+  else
+    launcher="$HOME/.local/share/galfits/fits_viewer_launcher.py"
+  fi
+fi
+if [ ! -f "$launcher" ]; then
+  printf 'fits_viewer: launcher not found: %s\n' "$launcher" >&2
+  exit 1
+fi
+if [ "$#" -gt 1 ]; then
+  printf 'Usage: fits_viewer [file.fits]\n' >&2
+  exit 2
+fi
+exec python3 "$launcher" "$@"

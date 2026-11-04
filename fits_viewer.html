@@ -1,0 +1,871 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GalfitS FITS 坐标查看器</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #101217; --panel: #191c23; --panel-2: #20242d;
+      --line: #303642; --text: #e8eaf0; --muted: #9ba4b5;
+      --accent: #70d6c7; --yellow: #ffd166; --danger: #ff8d8d;
+    }
+    * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+    body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    button, input, select { font: inherit; }
+    button, .file-button { border: 1px solid var(--line); border-radius: 7px; background: var(--panel-2); color: var(--text); padding: 7px 12px; cursor: pointer; }
+    button:hover, .file-button:hover { border-color: var(--accent); }
+    button:disabled { opacity: .45; cursor: default; }
+    input, select { min-width: 0; border: 1px solid var(--line); border-radius: 6px; background: #11141a; color: var(--text); padding: 5px 7px; }
+    input[type="number"] { width: 72px; }
+    input[type="file"] { display: none; }
+    header { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 15px 20px; border-bottom: 1px solid var(--line); background: var(--panel); }
+    h1 { margin: 0; font-size: 18px; font-weight: 600; }
+    .subtitle { color: var(--muted); }
+    #status { margin-left: auto; color: var(--muted); }
+    #status.error { color: var(--danger); }
+    main { display: grid; grid-template-columns: minmax(0, 1fr) 16px minmax(240px, var(--sidebar-width, 1fr)); padding: 16px; max-width: 1600px; margin: auto; }
+    .viewer, .panel { border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+    .viewer { min-width: 0; padding: 14px; }
+    #panelResizer { position: relative; cursor: col-resize; touch-action: none; }
+    #panelResizer::after { content: ""; position: absolute; inset: 0 7px; border-radius: 2px; background: var(--line); }
+    #panelResizer:hover::after, #panelResizer:active::after { background: var(--accent); }
+    body.panel-resizing { cursor: col-resize; user-select: none; }
+    .toolbar { display: flex; align-items: end; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+    .field { display: grid; gap: 3px; color: var(--muted); font-size: 12px; }
+    .canvas-stack { position: relative; width: 100%; min-height: 280px; display: grid; place-items: center; overflow: hidden; border-radius: 7px; background: #090b0f; }
+    .canvas-stack.loaded { width: 100%; min-height: 0; margin: 0; }
+    canvas { image-rendering: pixelated; }
+    #imageCanvas { position: absolute; inset: 0; display: block; width: 100%; height: 100%; }
+    #overlayCanvas { position: absolute; inset: 0; width: 100%; height: 100%; cursor: crosshair; touch-action: none; image-rendering: auto; }
+    #empty { position: absolute; inset: 0; display: grid; place-items: center; padding: 30px; text-align: center; color: var(--muted); pointer-events: none; }
+    .sidebar { min-width: 0; display: grid; align-content: start; gap: 12px; }
+    .panel { padding: 14px; }
+    .panel h2 { margin: 0 0 10px; font-size: 14px; font-weight: 600; }
+    .readout { display: grid; grid-template-columns: 105px minmax(0, 1fr); gap: 6px 8px; }
+    .readout dt { color: var(--muted); }
+    .readout dd { margin: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+    .delta { color: var(--yellow); font-weight: 600; }
+    .hint { margin: 10px 0 0; color: var(--muted); font-size: 12px; }
+    .estimate-actions { display: flex; align-items: end; gap: 9px; flex-wrap: wrap; }
+    #estimateResult { margin-top: 10px; }
+    #estimateMessage { margin: 0 0 10px; }
+    #estimateMessage.error { color: var(--danger); }
+    #estimateMessage.success { color: var(--accent); }
+    details { color: var(--muted); font-size: 12px; }
+    summary { cursor: pointer; color: var(--text); }
+    details p { margin: 8px 0 0; }
+    .drop-active { outline: 2px dashed var(--accent); outline-offset: -5px; }
+    @media (max-width: 900px) { main { grid-template-columns: 1fr; gap: 14px; } #panelResizer { display: none; } #status { width: 100%; margin-left: 0; } }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>GalfitS FITS 坐标查看器</h1>
+    <span id="status">请选择或拖入一个 FITS 文件</span>
+  </header>
+  <main>
+    <section class="viewer" id="dropZone">
+      <div class="toolbar">
+        <label class="file-button" for="fileInput">打开 FITS</label>
+        <input id="fileInput" type="file" accept=".fits,.fit,.fts">
+        <label class="field" id="hduField" hidden>图像 HDU <select id="hduSelect"></select></label>
+        <label class="field" id="planeField" hidden>Cube 平面（从 0 开始） <input id="planeInput" type="number" min="0" step="1" value="0"></label>
+        <label class="field">下限 × σ <input id="nminInput" type="number" min="0.01" step="0.5" value="5"></label>
+        <label class="field">上限 × σ <input id="nmaxInput" type="number" min="0.01" step="10" placeholder="自动"></label>
+        <label class="field">frac <input id="fracInput" type="number" min="0.01" max="0.99" step="0.05" value="0.4"></label>
+        <label class="field">色图 <select id="cmapSelect"><option value="seismic">seismic</option><option value="gray">gray</option></select></label>
+      </div>
+      <div class="canvas-stack" id="canvasStack">
+        <canvas id="imageCanvas" width="640" height="360" hidden></canvas>
+        <canvas id="overlayCanvas" width="640" height="360" hidden></canvas>
+        <div id="empty">点击“打开 FITS”，或把文件拖到这里。<br>移动鼠标查看坐标，点击可固定一个像素。</div>
+      </div>
+    </section>
+    <div id="panelResizer" role="separator" aria-orientation="vertical" aria-label="调整图像与参数栏宽度" title="拖拽调整图像与参数栏宽度"></div>
+    <aside class="sidebar">
+      <section class="panel">
+        <h2 id="readoutTitle">坐标读数</h2>
+        <dl class="readout">
+          <dt>参考 RA</dt><dd id="referenceRA">—</dd>
+          <dt>参考 Dec</dt><dd id="referenceDec">—</dd>
+          <dt>目标 FITS X, Y</dt><dd id="pixelXY">—</dd>
+          <dt>相对参考 ΔX, ΔY</dt><dd id="pixelDeltaXY">—</dd>
+          <dt>ΔRA</dt><dd class="delta" id="deltaRA">—</dd>
+          <dt>ΔDec</dt><dd class="delta" id="deltaDec">—</dd>
+        </dl>
+        <p class="hint">参考点取 header 的 CRPIX/CRVAL，青色十字标出该点。ΔX/ΔY 是目标像素减参考像素。ΔRA 未乘 cosδ，角度偏移单位为角秒。</p>
+      </section>
+      <section class="panel">
+        <h2>粗略估计 Re、轴比与 n</h2>
+        <p class="hint" id="estimateMessage">第 1 步，在图上单击星系中心。第 2 步，点击“估计 Re / q / n”。不选点时使用 header 参考像素。</p>
+        <div class="estimate-actions">
+          <label class="field">估计半径（像素） <input id="radiusInput" type="number" min="3" step="1" value="25"></label>
+          <button id="estimateButton" disabled>估计 Re / q / n</button>
+        </div>
+        <dl class="readout" id="estimateResult">
+          <dt>中心</dt><dd id="estimateCenter">—</dd>
+          <dt>Re（半长轴）</dt><dd id="estimateRe">—</dd>
+          <dt>Sérsic n（粗略）</dt><dd id="estimateN">—</dd>
+          <dt>q = b/a</dt><dd id="estimateQ">—</dd>
+          <dt>GalfitS Pa7</dt><dd id="estimatePA">—</dd>
+        </dl>
+        <p class="hint">黄色十字是你选的位置，蓝色实线是 Re，橙色实线是当前估计半径。选点尽量落在星系最亮区域附近。</p>
+      </section>
+      <details class="panel">
+        <summary>算法与适用范围</summary>
+        <p>显示沿用 Example/plot_utils.py：3σ、5 次 sigma clipping 估计噪声，默认下限 5σ、上限为图像最大值，arcsinh 拉伸 frac=0.4，seismic 色图，原点位于左下。</p>
+        <p>坐标使用 FITS 的 CD 矩阵，或 PC 矩阵与 CDELT，并支持 RA---TAN/DEC--TAN、SIN 和 ARC 投影。带 SIP 畸变的文件会明确提示，当前不会应用 SIP 修正。</p>
+        <p>GalfitS Pa7 是北为 0°、东为 90° 的天球位置角，等效于通常所说的 North through East。这里的 PA 按同一约定输出。</p>
+        <p>Re/q/n 只是快速目测初值。q 来自 3σ 连通区域的流量加权二阶矩，Re 来自所设椭圆光圈内的半光半径，n 则由同一累计流量曲线的 R80/R20 集中度反解，搜索范围为 0.5–6。它们不是完整 Sérsic 拟合的结果，未做 PSF 反卷积，并会受到邻近源和估计半径影响；n 达到边界时尤其不可靠。</p>
+        <p>目前直接支持未压缩的 FITS 图像及 cube 的单个平面；.fits.gz 需要先解压。</p>
+      </details>
+    </aside>
+  </main>
+  <script>
+  (() => {
+    "use strict";
+    const DEG = Math.PI / 180;
+    const ARCSEC_PER_DEG = 3600;
+
+    function number(header, key, fallback = undefined) {
+      return header[key] === undefined ? fallback : Number(header[key]);
+    }
+
+    function parseCardValue(card) {
+      let raw = card.length > 10 ? card.slice(10) : "";
+      raw = raw.trim();
+      if (raw.startsWith("'")) {
+        let value = "";
+        for (let i = 1; i < raw.length; i++) {
+          if (raw[i] === "'") {
+            if (raw[i + 1] === "'") { value += "'"; i++; }
+            else break;
+          } else value += raw[i];
+        }
+        return value.trim();
+      }
+      const slash = raw.indexOf("/");
+      if (slash >= 0) raw = raw.slice(0, slash);
+      raw = raw.trim();
+      if (raw === "T") return true;
+      if (raw === "F") return false;
+      if (raw === "") return "";
+      const numeric = Number(raw.replace(/[dD]/g, "E"));
+      return Number.isNaN(numeric) ? raw : numeric;
+    }
+
+    function hduDataBytes(header) {
+      const naxis = number(header, "NAXIS", 0);
+      let elements = naxis > 0 ? 1 : 0;
+      for (let axis = 1; axis <= naxis; axis++) elements *= number(header, `NAXIS${axis}`, 0);
+      const bytesPerValue = Math.abs(number(header, "BITPIX", 8)) / 8;
+      const pcount = number(header, "PCOUNT", 0);
+      const gcount = number(header, "GCOUNT", 1);
+      return (elements + pcount) * gcount * bytesPerValue;
+    }
+
+    function parseFits(buffer) {
+      const bytes = new Uint8Array(buffer);
+      if (bytes[0] === 0x1f && bytes[1] === 0x8b) throw new Error("这是 gzip 压缩文件，请先解压 .fits.gz。");
+      const decoder = new TextDecoder("ascii");
+      const hdus = [];
+      let offset = 0;
+      while (offset + 2880 <= bytes.length) {
+        const header = {};
+        let foundEnd = false;
+        let dataStart = offset;
+        while (dataStart + 2880 <= bytes.length) {
+          const block = decoder.decode(bytes.subarray(dataStart, dataStart + 2880));
+          dataStart += 2880;
+          for (let i = 0; i < block.length; i += 80) {
+            const card = block.slice(i, i + 80);
+            const key = card.slice(0, 8).trim();
+            if (key === "END") { foundEnd = true; break; }
+            if (key && card[8] === "=") header[key] = parseCardValue(card);
+          }
+          if (foundEnd) break;
+        }
+        if (!foundEnd) throw new Error("FITS header 缺少 END，文件可能不完整。");
+        const dataBytes = hduDataBytes(header);
+        const dataEnd = dataStart + dataBytes;
+        if (dataEnd > bytes.length) throw new Error("FITS 数据区比 header 声明的尺寸短。");
+        hdus.push({ header, dataStart, dataBytes, index: hdus.length });
+        offset = dataStart + Math.ceil(dataBytes / 2880) * 2880;
+        if (dataBytes === 0 && offset >= bytes.length) break;
+      }
+      if (!hdus.length) throw new Error("没有读到有效的 FITS HDU。");
+      return { buffer, hdus };
+    }
+
+    function isImageHdu(hdu) {
+      const h = hdu.header;
+      const xtension = String(h.XTENSION || "").toUpperCase();
+      return number(h, "NAXIS", 0) >= 2 && number(h, "NAXIS1", 0) > 0 && number(h, "NAXIS2", 0) > 0 && !xtension.includes("BINTABLE") && !h.ZIMAGE;
+    }
+
+    function readImage(fits, hduIndex, plane = 0) {
+      const hdu = fits.hdus[hduIndex];
+      if (!hdu || !isImageHdu(hdu)) throw new Error("所选 HDU 不是可直接读取的图像。");
+      const h = hdu.header;
+      const width = number(h, "NAXIS1"), height = number(h, "NAXIS2"), naxis = number(h, "NAXIS");
+      let planeCount = 1;
+      for (let axis = 3; axis <= naxis; axis++) planeCount *= number(h, `NAXIS${axis}`, 0);
+      if (!Number.isInteger(plane) || plane < 0 || plane >= planeCount) throw new Error(`Cube 平面必须位于 0 到 ${planeCount - 1}。`);
+      const bitpix = number(h, "BITPIX");
+      if (![8, 16, 32, 64, -32, -64].includes(bitpix)) throw new Error(`暂不支持 BITPIX=${bitpix}。`);
+      const count = width * height, bytesPerValue = Math.abs(bitpix) / 8;
+      const start = hdu.dataStart + plane * count * bytesPerValue;
+      if (start + count * bytesPerValue > hdu.dataStart + hdu.dataBytes) throw new Error("所选平面的数据超出 HDU 范围。");
+      const view = new DataView(fits.buffer, start, count * bytesPerValue);
+      const data = new Float32Array(count);
+      const bscale = number(h, "BSCALE", 1), bzero = number(h, "BZERO", 0);
+      const blank = h.BLANK === undefined ? null : Number(h.BLANK);
+      for (let i = 0; i < count; i++) {
+        const at = i * bytesPerValue;
+        let value;
+        if (bitpix === 8) value = view.getUint8(at);
+        else if (bitpix === 16) value = view.getInt16(at, false);
+        else if (bitpix === 32) value = view.getInt32(at, false);
+        else if (bitpix === 64) value = Number(view.getBigInt64(at, false));
+        else if (bitpix === -32) value = view.getFloat32(at, false);
+        else value = view.getFloat64(at, false);
+        data[i] = blank !== null && value === blank ? NaN : value * bscale + bzero;
+      }
+      return { data, width, height, planeCount, header: h, hduIndex, plane };
+    }
+
+    function medianSorted(values) {
+      const n = values.length;
+      if (!n) return NaN;
+      const middle = Math.floor(n / 2);
+      return n % 2 ? values[middle] : 0.5 * (values[middle - 1] + values[middle]);
+    }
+
+    function finiteValues(data, mask = null) {
+      const values = [];
+      for (let i = 0; i < data.length; i++) if ((mask === null || mask[i]) && Number.isFinite(data[i])) values.push(data[i]);
+      return Float64Array.from(values);
+    }
+
+    function meanAndStd(values) {
+      if (!values.length) return { mean: NaN, std: NaN };
+      let mean = 0;
+      for (const value of values) mean += value;
+      mean /= values.length;
+      let variance = 0;
+      for (const value of values) variance += (value - mean) ** 2;
+      return { mean, std: Math.sqrt(variance / values.length) };
+    }
+
+    function sigmaClippedStats(data, sigma = 3, maxiters = 5, mask = null) {
+      let values = finiteValues(data, mask);
+      for (let iteration = 0; iteration < maxiters && values.length; iteration++) {
+        values.sort();
+        const center = medianSorted(values), std = meanAndStd(values).std;
+        if (!Number.isFinite(std) || std === 0) break;
+        const kept = [];
+        for (const value of values) if (Math.abs(value - center) <= sigma * std) kept.push(value);
+        if (kept.length === values.length) break;
+        values = Float64Array.from(kept);
+      }
+      values.sort();
+      const moments = meanAndStd(values);
+      return { mean: moments.mean, median: medianSorted(values), std: moments.std, count: values.length };
+    }
+
+    function normalizeImageValue(input, min, max, frac = 0.4, sky = 0) {
+      if (!Number.isFinite(input)) return NaN;
+      const image = input - sky;
+      let value = image > min
+        ? frac + (1 - frac) * (Math.asinh(image) - Math.asinh(min)) / (Math.asinh(max) - Math.asinh(min))
+        : image * frac / min;
+      if (value < -frac) value = -frac - (1 - frac) * (Math.asinh(-value) - Math.asinh(frac)) / (Math.asinh(frac * max / min) - Math.asinh(frac));
+      return value;
+    }
+
+    function seismicColor(value) {
+      const t = Math.max(0, Math.min(1, 0.5 * (value + 1)));
+      let r = 0, g = 0, b = 0;
+      if (t < 0.25) b = 0.3 + 2.8 * t;
+      else if (t < 0.5) { r = g = 4 * (t - 0.25); b = 1; }
+      else if (t < 0.75) { r = 1; g = b = 1 - 4 * (t - 0.5); }
+      else r = 1 - 2 * (t - 0.75);
+      return [Math.round(255 * r), Math.round(255 * g), Math.round(255 * b)];
+    }
+
+    function unitDegrees(header, axis) {
+      const unit = String(header[`CUNIT${axis}`] || "deg").trim().toLowerCase();
+      if (["deg", "degree", "degrees"].includes(unit)) return 1;
+      if (["rad", "radian", "radians"].includes(unit)) return 1 / DEG;
+      if (["arcsec", "arcsecond"].includes(unit)) return 1 / 3600;
+      if (["arcmin", "arcminute"].includes(unit)) return 1 / 60;
+      throw new Error(`暂不支持 CUNIT${axis}=${unit}。`);
+    }
+
+    function createWCS(header) {
+      const ctype1 = String(header.CTYPE1 || "").toUpperCase(), ctype2 = String(header.CTYPE2 || "").toUpperCase();
+      if (!ctype1.startsWith("RA---") || !ctype2.startsWith("DEC--")) throw new Error("需要前两轴依次为 RA/DEC 的天球 WCS。");
+      const projection1 = ctype1.slice(5, 8), projection2 = ctype2.slice(5, 8);
+      if (projection1 !== projection2 || !["TAN", "SIN", "ARC"].includes(projection1)) throw new Error(`暂不支持投影 ${projection1}/${projection2}，目前支持 TAN、SIN、ARC。`);
+      const crpix = [number(header, "CRPIX1"), number(header, "CRPIX2")], crval = [number(header, "CRVAL1"), number(header, "CRVAL2")];
+      if (![...crpix, ...crval].every(Number.isFinite)) throw new Error("WCS 缺少有效的 CRPIX/CRVAL。");
+      let matrix;
+      if (header.CD1_1 !== undefined) {
+        matrix = [[number(header, "CD1_1", 0), number(header, "CD1_2", 0)], [number(header, "CD2_1", 0), number(header, "CD2_2", 0)]];
+      } else {
+        const cdelt = [number(header, "CDELT1", 1), number(header, "CDELT2", 1)];
+        let pc;
+        if (header.PC1_1 !== undefined) {
+          pc = [[number(header, "PC1_1", 0), number(header, "PC1_2", 0)], [number(header, "PC2_1", 0), number(header, "PC2_2", 0)]];
+        } else {
+          const angle = number(header, "CROTA2", 0) * DEG;
+          pc = [[Math.cos(angle), -Math.sin(angle)], [Math.sin(angle), Math.cos(angle)]];
+        }
+        matrix = [[cdelt[0] * pc[0][0], cdelt[0] * pc[0][1]], [cdelt[1] * pc[1][0], cdelt[1] * pc[1][1]]];
+      }
+      matrix[0] = matrix[0].map(value => value * unitDegrees(header, 1));
+      matrix[1] = matrix[1].map(value => value * unitDegrees(header, 2));
+      if (!matrix.flat().every(Number.isFinite)) throw new Error("WCS 线性矩阵无效。");
+      return { header, crpix, crval, matrix, projection: projection1, hasSIP: ["A_ORDER", "B_ORDER", "AP_ORDER", "BP_ORDER"].some(key => header[key] !== undefined) };
+    }
+
+    function wrapRA(ra) { return ((ra % 360) + 360) % 360; }
+    function wrapDeltaRA(delta) { return ((delta + 180) % 360 + 360) % 360 - 180; }
+
+    function pixelToSky(wcs, x, y) {
+      const dx = x + 1 - wcs.crpix[0], dy = y + 1 - wcs.crpix[1];
+      const xi = (wcs.matrix[0][0] * dx + wcs.matrix[0][1] * dy) * DEG;
+      const eta = (wcs.matrix[1][0] * dx + wcs.matrix[1][1] * dy) * DEG;
+      const ra0 = wcs.crval[0] * DEG, dec0 = wcs.crval[1] * DEG;
+      let along, c;
+      if (wcs.projection === "TAN") { along = 1; c = 1; }
+      else if (wcs.projection === "SIN") {
+        const rad2 = xi * xi + eta * eta;
+        if (rad2 > 1) return { ra: NaN, dec: NaN };
+        along = 1; c = Math.sqrt(1 - rad2);
+      } else {
+        const radius = Math.hypot(xi, eta);
+        along = radius === 0 ? 1 : Math.sin(radius) / radius;
+        c = Math.cos(radius);
+      }
+      const horizontal = c * Math.cos(dec0) - along * eta * Math.sin(dec0);
+      const east = along * xi;
+      const vertical = c * Math.sin(dec0) + along * eta * Math.cos(dec0);
+      const ra = ra0 + Math.atan2(east, horizontal);
+      const dec = Math.atan2(vertical, Math.hypot(east, horizontal));
+      return { ra: wrapRA(ra / DEG), dec: dec / DEG };
+    }
+
+    function skyDeltas(reference, sky) {
+      return {
+        ra: wrapDeltaRA(sky.ra - reference.ra) * ARCSEC_PER_DEG,
+        dec: (sky.dec - reference.dec) * ARCSEC_PER_DEG
+      };
+    }
+
+    function skyOffsets(reference, sky) {
+      const delta = skyDeltas(reference, sky);
+      return { east: delta.ra * Math.cos(reference.dec * DEG), north: delta.dec };
+    }
+
+    function pixelScaleAt(wcs, x, y, vx = 1, vy = 0) {
+      const origin = pixelToSky(wcs, x, y), moved = pixelToSky(wcs, x + vx, y + vy);
+      const offset = skyOffsets(origin, moved);
+      return Math.hypot(offset.east, offset.north);
+    }
+
+    function positionAngleFromVector(wcs, x, y, vx, vy) {
+      const origin = pixelToSky(wcs, x, y), moved = pixelToSky(wcs, x + vx, y + vy);
+      const offset = skyOffsets(origin, moved);
+      return ((Math.atan2(offset.east, offset.north) / DEG) % 180 + 180) % 180;
+    }
+
+    function localSkyDirections(wcs, x, y) {
+      const origin = pixelToSky(wcs, x, y);
+      const offsetX = skyOffsets(origin, pixelToSky(wcs, x + 1, y)), offsetY = skyOffsets(origin, pixelToSky(wcs, x, y + 1));
+      const determinant = offsetX.east * offsetY.north - offsetY.east * offsetX.north;
+      if (!Number.isFinite(determinant) || Math.abs(determinant) < 1e-15) return null;
+      const east = [offsetY.north / determinant, -offsetY.east / determinant];
+      const north = [-offsetX.north / determinant, offsetX.east / determinant];
+      const normalize = vector => { const length = Math.hypot(...vector); return vector.map(value => value / length); };
+      return { east: normalize(east), north: normalize(north) };
+    }
+
+    function logGamma(value) {
+      const coefficients = [
+        676.5203681218851, -1259.1392167224028, 771.3234287776531,
+        -176.6150291621406, 12.507343278686905, -0.13857109526572012,
+        9.984369578019572e-6, 1.5056327351493116e-7
+      ];
+      if (value < 0.5) return Math.log(Math.PI) - Math.log(Math.sin(Math.PI * value)) - logGamma(1 - value);
+      let z = value - 1, sum = 0.9999999999998099;
+      for (let i = 0; i < coefficients.length; i++) sum += coefficients[i] / (z + i + 1);
+      const t = z + 7.5;
+      return 0.5 * Math.log(2 * Math.PI) + (z + 0.5) * Math.log(t) - t + Math.log(sum);
+    }
+
+    function regularizedGammaP(a, x) {
+      if (!(a > 0) || !(x >= 0)) return NaN;
+      if (x === 0) return 0;
+      const factor = Math.exp(-x + a * Math.log(x) - logGamma(a));
+      if (x < a + 1) {
+        let term = 1 / a, sum = term;
+        for (let i = 1; i <= 1000; i++) {
+          term *= x / (a + i);
+          sum += term;
+          if (Math.abs(term) < Math.abs(sum) * 1e-14) break;
+        }
+        return Math.max(0, Math.min(1, factor * sum));
+      }
+      const tiny = 1e-300;
+      let b = x + 1 - a, c = 1 / tiny;
+      let d = Math.abs(b) < tiny ? 1 / tiny : 1 / b;
+      let h = d;
+      for (let i = 1; i <= 1000; i++) {
+        const an = -i * (i - a);
+        b += 2;
+        d = an * d + b;
+        if (Math.abs(d) < tiny) d = tiny;
+        c = b + an / c;
+        if (Math.abs(c) < tiny) c = tiny;
+        d = 1 / d;
+        const delta = d * c;
+        h *= delta;
+        if (Math.abs(delta - 1) < 1e-14) break;
+      }
+      return Math.max(0, Math.min(1, 1 - factor * h));
+    }
+
+    function gammaQuantile(a, probability) {
+      if (!(probability > 0 && probability < 1)) return probability <= 0 ? 0 : Infinity;
+      let low = 0, high = Math.max(1, a);
+      while (regularizedGammaP(a, high) < probability && high < 1e8) high *= 2;
+      for (let i = 0; i < 60; i++) {
+        const middle = 0.5 * (low + high);
+        if (regularizedGammaP(a, middle) < probability) low = middle;
+        else high = middle;
+      }
+      return 0.5 * (low + high);
+    }
+
+    function sersicConcentration(n) {
+      if (!(n > 0)) return NaN;
+      const x20 = gammaQuantile(2 * n, 0.2), x80 = gammaQuantile(2 * n, 0.8);
+      return (x80 / x20) ** n;
+    }
+
+    function estimateSersicIndex(concentration, minimum = 0.5, maximum = 6) {
+      const lowerConcentration = sersicConcentration(minimum);
+      const upperConcentration = sersicConcentration(maximum);
+      if (!(concentration > 1)) return { n: NaN, limit: 0 };
+      if (concentration <= lowerConcentration) return { n: minimum, limit: -1 };
+      if (concentration >= upperConcentration) return { n: maximum, limit: 1 };
+      let low = minimum, high = maximum;
+      for (let i = 0; i < 45; i++) {
+        const middle = 0.5 * (low + high);
+        if (sersicConcentration(middle) < concentration) low = middle;
+        else high = middle;
+      }
+      return { n: 0.5 * (low + high), limit: 0 };
+    }
+
+    function estimateGeometry(image, cx, cy, radius, stats = null) {
+      const { data, width: nx, height: ny } = image;
+      stats = stats || sigmaClippedStats(data);
+      const sky = stats.median, sigma = stats.std;
+      if (!Number.isFinite(sigma) || sigma <= 0) throw new Error("无法估计有效的背景噪声。");
+      if (!(radius >= 3)) throw new Error("估计半径至少为 3 像素。");
+      const threshold = sky + 3 * sigma, r2max = radius * radius;
+      const indexOf = (x, y) => y * nx + x;
+      const inRadius = (x, y) => (x - cx) ** 2 + (y - cy) ** 2 <= r2max;
+      let seedX = Math.round(cx), seedY = Math.round(cy), seedValue = -Infinity;
+      const search = Math.max(3, Math.min(12, Math.round(radius / 3)));
+      for (let y = Math.max(0, Math.floor(cy - search)); y <= Math.min(ny - 1, Math.ceil(cy + search)); y++) {
+        for (let x = Math.max(0, Math.floor(cx - search)); x <= Math.min(nx - 1, Math.ceil(cx + search)); x++) {
+          const value = data[indexOf(x, y)];
+          if ((x - cx) ** 2 + (y - cy) ** 2 <= search * search && value > seedValue) { seedX = x; seedY = y; seedValue = value; }
+        }
+      }
+      if (!(seedValue >= threshold)) throw new Error(`选中点附近 ${search} 像素内没有高于背景 3σ 的像素。`);
+      const visited = new Uint8Array(nx * ny), component = [], stack = [[seedX, seedY]];
+      visited[indexOf(seedX, seedY)] = 1;
+      while (stack.length) {
+        const [x, y] = stack.pop(), value = data[indexOf(x, y)];
+        if (!(value >= threshold) || !inRadius(x, y)) continue;
+        component.push([x, y, value - sky]);
+        for (let dy = -1; dy <= 1; dy++) {
+          for (let dx = -1; dx <= 1; dx++) {
+            if (dx === 0 && dy === 0) continue;
+            const xx = x + dx, yy = y + dy;
+            if (xx < 0 || xx >= nx || yy < 0 || yy >= ny) continue;
+            const index = indexOf(xx, yy);
+            if (!visited[index] && data[index] >= threshold && inRadius(xx, yy)) { visited[index] = 1; stack.push([xx, yy]); }
+          }
+        }
+      }
+      if (component.length < 5) throw new Error("3σ 连通区域不足 5 个像素，无法稳定估计形状。");
+      let totalWeight = 0, meanX = 0, meanY = 0;
+      for (const [x, y, weight] of component) { totalWeight += weight; meanX += weight * x; meanY += weight * y; }
+      meanX /= totalWeight; meanY /= totalWeight;
+      let mxx = 0, myy = 0, mxy = 0;
+      for (const [x, y, weight] of component) {
+        const dx = x - meanX, dy = y - meanY;
+        mxx += weight * dx * dx; myy += weight * dy * dy; mxy += weight * dx * dy;
+      }
+      mxx /= totalWeight; myy /= totalWeight; mxy /= totalWeight;
+      const discriminant = Math.sqrt((mxx - myy) ** 2 + 4 * mxy * mxy);
+      const majorVariance = 0.5 * (mxx + myy + discriminant), minorVariance = Math.max(0, 0.5 * (mxx + myy - discriminant));
+      if (!(majorVariance > 0) || !(totalWeight > 0)) throw new Error("连通区域的二阶矩无效。");
+      const q = Math.max(0.02, Math.min(1, Math.sqrt(minorVariance / majorVariance)));
+      const theta = 0.5 * Math.atan2(2 * mxy, mxx - myy), cos = Math.cos(theta), sin = Math.sin(theta);
+      const bins = new Float64Array(Math.ceil(radius) + 1);
+      for (let y = Math.max(0, Math.floor(meanY - radius)); y <= Math.min(ny - 1, Math.ceil(meanY + radius)); y++) {
+        for (let x = Math.max(0, Math.floor(meanX - radius)); x <= Math.min(nx - 1, Math.ceil(meanX + radius)); x++) {
+          const value = data[indexOf(x, y)];
+          if (!Number.isFinite(value)) continue;
+          const dx = x - meanX, dy = y - meanY;
+          const major = cos * dx + sin * dy, minor = -sin * dx + cos * dy;
+          const ellipticalRadius = Math.hypot(major, minor / q);
+          if (ellipticalRadius < radius) bins[Math.floor(ellipticalRadius)] += value - sky;
+        }
+      }
+      let total = 0;
+      for (const flux of bins) total += flux;
+      if (!(total > 0)) throw new Error("椭圆光圈内的背景扣除流量不大于零。");
+      function radiusAtFraction(fraction) {
+        let cumulative = 0;
+        for (let i = 0; i < bins.length; i++) {
+          const previous = cumulative;
+          cumulative += bins[i];
+          if (cumulative >= total * fraction) {
+            const offset = bins[i] === 0 ? 0 : (total * fraction - previous) / bins[i];
+            return i + Math.max(0, Math.min(1, offset));
+          }
+        }
+        return radius;
+      }
+      const r20 = radiusAtFraction(0.2), re = radiusAtFraction(0.5), r80 = radiusAtFraction(0.8);
+      const concentration = r20 > 0 ? r80 / r20 : NaN;
+      const sersic = r80 < radius && Number.isFinite(concentration) ? estimateSersicIndex(concentration) : { n: NaN, limit: 0 };
+      return { cx: meanX, cy: meanY, q, theta, re, n: sersic.n, nLimit: sersic.limit, concentration, npix: component.length, threshold, sky, radius };
+    }
+
+    function formatNumber(value, digits = 6) { return Number.isFinite(value) ? Number(value).toFixed(digits) : "—"; }
+    function formatArcsec(value) {
+      if (!Number.isFinite(value)) return "—";
+      return `${value >= 0 ? "+" : "−"}${Math.abs(value).toFixed(3)}″`;
+    }
+    function formatPixelOffset(value) {
+      if (!Number.isFinite(value)) return "—";
+      return `${value >= 0 ? "+" : "−"}${Math.abs(value).toFixed(2)}`;
+    }
+
+    function init() {
+      const byId = id => document.getElementById(id);
+      const ui = {
+        file: byId("fileInput"), hdu: byId("hduSelect"), hduField: byId("hduField"), plane: byId("planeInput"), planeField: byId("planeField"),
+        nmin: byId("nminInput"), nmax: byId("nmaxInput"), frac: byId("fracInput"), cmap: byId("cmapSelect"),
+        base: byId("imageCanvas"), overlay: byId("overlayCanvas"), stack: byId("canvasStack"), empty: byId("empty"),
+        status: byId("status"), drop: byId("dropZone"), radius: byId("radiusInput"), estimate: byId("estimateButton")
+      };
+      const baseContext = ui.base.getContext("2d", { alpha: false }), overlayContext = ui.overlay.getContext("2d");
+      const offscreen = document.createElement("canvas"), offscreenContext = offscreen.getContext("2d", { alpha: false });
+      const state = { fits: null, image: null, wcs: null, reference: null, selected: null, hover: null, geometry: null, stats: null };
+      function setStatus(message, error = false) { ui.status.textContent = message; ui.status.classList.toggle("error", error); }
+      function setText(id, value) { byId(id).textContent = value; }
+      function setEstimateMessage(message, kind = "") {
+        const element = byId("estimateMessage");
+        element.textContent = message;
+        element.className = `hint${kind ? ` ${kind}` : ""}`;
+      }
+      function canvasPoint(x, y) { return [x + 0.5, state.image.height - y - 0.5]; }
+
+      function drawCross(context, x, y, color, unit, size = 6) {
+        const [cx, cy] = canvasPoint(x, y);
+        context.strokeStyle = color; context.lineWidth = unit; context.beginPath();
+        context.moveTo(cx - size, cy); context.lineTo(cx + size, cy);
+        context.moveTo(cx, cy - size); context.lineTo(cx, cy + size); context.stroke();
+      }
+
+      function drawCompass(context, unit) {
+        if (!state.wcs) return;
+        const { width: nx, height: ny } = state.image, x = 0.84 * (nx - 1), y = 0.16 * (ny - 1);
+        const directions = localSkyDirections(state.wcs, x, y);
+        if (!directions) return;
+        const length = 0.06 * Math.min(nx, ny), origin = canvasPoint(x, y);
+        context.font = `${Math.max(5 / 3, (0.035 / 3) * Math.min(nx, ny))}px sans-serif`;
+        context.textAlign = "center"; context.textBaseline = "middle";
+        for (const [name, vector] of [["N", directions.north], ["E", directions.east]]) {
+          const dx = vector[0], dy = -vector[1], end = [origin[0] + length * dx, origin[1] + length * dy];
+          context.strokeStyle = "#000000"; context.fillStyle = "#000000"; context.lineWidth = unit * 2.6; context.beginPath();
+          context.moveTo(...origin); context.lineTo(...end); context.stroke();
+          const angle = Math.atan2(dy, dx);
+          context.beginPath(); context.moveTo(...end);
+          context.lineTo(end[0] - 7 * unit * Math.cos(angle - 0.5), end[1] - 7 * unit * Math.sin(angle - 0.5));
+          context.lineTo(end[0] - 7 * unit * Math.cos(angle + 0.5), end[1] - 7 * unit * Math.sin(angle + 0.5));
+          context.closePath(); context.fill();
+          const perpendicularX = -dy, perpendicularY = dx;
+          context.fillText(name, end[0] + 11 * unit * perpendicularX, end[1] + 11 * unit * perpendicularY);
+        }
+      }
+
+      function drawOverlay() {
+        if (!state.image) return;
+        const { width: nx, height: ny } = state.image;
+        const rect = ui.overlay.getBoundingClientRect();
+        if (!rect.width || !rect.height) return;
+        const dpr = window.devicePixelRatio || 1;
+        const displayWidth = Math.max(1, Math.round(rect.width * dpr));
+        const displayHeight = Math.max(1, Math.round(rect.height * dpr));
+        if (ui.overlay.width !== displayWidth || ui.overlay.height !== displayHeight) {
+          ui.overlay.width = displayWidth; ui.overlay.height = displayHeight;
+        }
+        overlayContext.setTransform(displayWidth / nx, 0, 0, displayHeight / ny, 0, 0);
+        overlayContext.clearRect(0, 0, nx, ny);
+        const unit = Math.max(nx, ny) / 650;
+        drawCross(overlayContext, state.reference.x, state.reference.y, "#70d6c7", unit, Math.min(nx, ny) * 0.025);
+        const active = state.hover || state.selected;
+        if (active) drawCross(overlayContext, active.x, active.y, state.hover ? "#ffffff" : "#ffd166", unit, Math.min(nx, ny) * 0.02);
+        if (state.geometry) {
+          const g = state.geometry, [cx, cy] = canvasPoint(g.cx, g.cy);
+          overlayContext.globalAlpha = 1;
+          overlayContext.strokeStyle = "#ff9f1c"; overlayContext.lineWidth = unit * 3;
+          overlayContext.setLineDash([]); overlayContext.beginPath();
+          overlayContext.ellipse(cx, cy, g.radius, g.radius * g.q, -g.theta, 0, 2 * Math.PI); overlayContext.stroke();
+          overlayContext.globalAlpha = 1;
+          overlayContext.strokeStyle = "#35a7ff"; overlayContext.lineWidth = unit * 3; overlayContext.setLineDash([]); overlayContext.beginPath();
+          overlayContext.ellipse(cx, cy, g.re, g.re * g.q, -g.theta, 0, 2 * Math.PI); overlayContext.stroke();
+          drawCross(overlayContext, g.cx, g.cy, "#35a7ff", unit, Math.min(nx, ny) * 0.018);
+        }
+        drawCompass(overlayContext, unit);
+      }
+
+      function renderImage() {
+        if (!state.image) return;
+        const { data, width: nx, height: ny } = state.image, nmin = Number(ui.nmin.value), frac = Number(ui.frac.value);
+        if (!(nmin > 0) || !(frac > 0 && frac < 1)) { setStatus("下限和 frac 必须是有效正数，且 frac 小于 1。", true); return; }
+        let min = nmin * state.stats.std;
+        if (!(min > 0)) min = Math.max(1e-12, Math.abs(state.stats.median) * 1e-6 + 1e-12);
+        let dataMax = -Infinity;
+        for (const value of data) if (Number.isFinite(value)) dataMax = Math.max(dataMax, value);
+        const nmaxText = ui.nmax.value.trim();
+        let max = nmaxText === "" ? dataMax : Number(nmaxText) * state.stats.std;
+        if (!(max > min)) max = min + Math.max(Math.abs(min), 1e-12);
+        offscreen.width = nx; offscreen.height = ny;
+        const pixels = offscreenContext.createImageData(nx, ny);
+        for (let y = 0; y < ny; y++) {
+          const canvasY = ny - 1 - y;
+          for (let x = 0; x < nx; x++) {
+            const value = normalizeImageValue(data[y * nx + x], min, max, frac, 0), at = 4 * (canvasY * nx + x);
+            let color;
+            if (!Number.isFinite(value)) color = [25, 27, 32];
+            else if (ui.cmap.value === "seismic") color = seismicColor(value);
+            else {
+              const gray = Math.round(255 * Math.max(0, Math.min(1, 0.5 * (value + 1))));
+              color = [gray, gray, gray];
+            }
+            pixels.data[at] = color[0]; pixels.data[at + 1] = color[1]; pixels.data[at + 2] = color[2]; pixels.data[at + 3] = 255;
+          }
+        }
+        offscreenContext.putImageData(pixels, 0, 0);
+        ui.base.width = nx; ui.base.height = ny;
+        baseContext.imageSmoothingEnabled = false; baseContext.drawImage(offscreen, 0, 0); drawOverlay();
+        setStatus("");
+      }
+
+      function updateReadout(point, pinned = false) {
+        if (!state.image || !state.reference || !point) return;
+        byId("readoutTitle").textContent = pinned ? "已固定的目标像素" : "鼠标所在目标像素";
+        setText("pixelXY", `${point.x + 1}, ${point.y + 1}`);
+        setText("pixelDeltaXY", `${formatPixelOffset(point.x - state.reference.x)}, ${formatPixelOffset(point.y - state.reference.y)}`);
+        if (state.wcs && state.reference.sky) {
+          const sky = pixelToSky(state.wcs, point.x, point.y), delta = skyDeltas(state.reference.sky, sky);
+          setText("deltaRA", formatArcsec(delta.ra)); setText("deltaDec", formatArcsec(delta.dec));
+        } else {
+          setText("deltaRA", "—"); setText("deltaDec", "—");
+        }
+      }
+
+      function eventPixel(event) {
+        if (!state.image) return null;
+        const rect = ui.overlay.getBoundingClientRect();
+        const canvasX = (event.clientX - rect.left) / rect.width * state.image.width, canvasY = (event.clientY - rect.top) / rect.height * state.image.height;
+        const x = Math.floor(canvasX), y = state.image.height - 1 - Math.floor(canvasY);
+        if (x < 0 || x >= state.image.width || y < 0 || y >= state.image.height) return null;
+        return { x, y };
+      }
+
+      function updateReference() {
+        const { width: nx, height: ny, header } = state.image;
+        const x = state.wcs ? state.wcs.crpix[0] - 1 : number(header, "CRPIX1", (nx + 1) / 2) - 1;
+        const y = state.wcs ? state.wcs.crpix[1] - 1 : number(header, "CRPIX2", (ny + 1) / 2) - 1;
+        state.reference = { x, y, sky: null };
+        if (state.wcs) {
+          state.reference.sky = { ra: state.wcs.crval[0], dec: state.wcs.crval[1] };
+          setText("referenceRA", `${formatNumber(state.reference.sky.ra)}°`);
+          setText("referenceDec", `${formatNumber(state.reference.sky.dec)}°`);
+        } else {
+          setText("referenceRA", "无可用 WCS"); setText("referenceDec", "无可用 WCS");
+        }
+      }
+
+      function clearGeometry() {
+        state.geometry = null;
+        for (const id of ["estimateCenter", "estimateRe", "estimateN", "estimateQ", "estimatePA"]) setText(id, "—");
+      }
+
+      function loadPlane() {
+        if (!state.fits) return;
+        try {
+          state.image = readImage(state.fits, Number(ui.hdu.value), Number(ui.plane.value || 0));
+          state.stats = sigmaClippedStats(state.image.data);
+          state.selected = null; state.hover = null; clearGeometry();
+          setEstimateMessage("第 1 步，在图上单击星系中心。第 2 步，点击“估计 Re / q / n”。不选点时使用 header 参考像素。");
+          let wcsWarning = "";
+          try {
+            state.wcs = createWCS(state.image.header);
+            if (state.wcs.hasSIP) wcsWarning = "检测到 SIP 畸变项，当前坐标未应用 SIP 修正。";
+          } catch (error) { state.wcs = null; wcsWarning = `${error.message} 图像仍可显示。`; }
+          ui.base.hidden = false; ui.overlay.hidden = false; ui.empty.hidden = true;
+          ui.stack.style.aspectRatio = `${state.image.width} / ${state.image.height}`; ui.stack.classList.add("loaded");
+          ui.radius.value = Math.max(3, Math.round(Math.min(state.image.width, state.image.height) / 4)); ui.estimate.disabled = false;
+          updateReference(); renderImage();
+          if (wcsWarning) setStatus(wcsWarning, true);
+          updateReadout({
+            x: Math.max(0, Math.min(state.image.width - 1, Math.round(state.reference.x))),
+            y: Math.max(0, Math.min(state.image.height - 1, Math.round(state.reference.y)))
+          });
+        } catch (error) { setStatus(error.message, true); }
+      }
+
+      async function openFile(file) {
+        if (!file) return;
+        try {
+          setStatus(`正在读取 ${file.name}…`);
+          state.fits = parseFits(await file.arrayBuffer());
+          const images = state.fits.hdus.filter(isImageHdu);
+          if (!images.length) throw new Error("文件里没有可直接显示的二维图像 HDU。");
+          ui.hdu.replaceChildren();
+          for (const hdu of images) {
+            const option = document.createElement("option"); option.value = hdu.index;
+            const name = hdu.header.EXTNAME ? ` ${hdu.header.EXTNAME}` : "";
+            option.textContent = `HDU ${hdu.index}${name} (${hdu.header.NAXIS1}×${hdu.header.NAXIS2})`; ui.hdu.append(option);
+          }
+          ui.hduField.hidden = images.length <= 1;
+          ui.planeField.hidden = Number(images[0].header.NAXIS) <= 2; ui.plane.value = 0;
+          loadPlane();
+        } catch (error) { setStatus(error.message, true); }
+      }
+
+      window.addEventListener("resize", drawOverlay);
+      if (typeof ResizeObserver !== "undefined") {
+        const stackResizeObserver = new ResizeObserver(drawOverlay);
+        stackResizeObserver.observe(ui.stack);
+      }
+
+      const layout = document.querySelector("main"), divider = byId("panelResizer"), sidebar = document.querySelector(".sidebar");
+      let panelDrag = null;
+      divider.addEventListener("pointerdown", event => {
+        if (event.button !== 0 || window.matchMedia("(max-width: 900px)").matches) return;
+        event.preventDefault();
+        const style = getComputedStyle(layout);
+        const contentWidth = layout.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+        panelDrag = {
+          startX: event.clientX,
+          startWidth: sidebar.getBoundingClientRect().width,
+          maxWidth: Math.max(240, contentWidth - 16 - 320)
+        };
+        divider.setPointerCapture(event.pointerId);
+        document.body.classList.add("panel-resizing");
+      });
+      divider.addEventListener("pointermove", event => {
+        if (!panelDrag) return;
+        const requested = panelDrag.startWidth + panelDrag.startX - event.clientX;
+        const width = Math.max(240, Math.min(panelDrag.maxWidth, requested));
+        layout.style.setProperty("--sidebar-width", `${width}px`);
+      });
+      const stopPanelDrag = event => {
+        if (!panelDrag) return;
+        panelDrag = null;
+        document.body.classList.remove("panel-resizing");
+        if (divider.hasPointerCapture(event.pointerId)) divider.releasePointerCapture(event.pointerId);
+        drawOverlay();
+      };
+      divider.addEventListener("pointerup", stopPanelDrag);
+      divider.addEventListener("pointercancel", stopPanelDrag);
+
+      ui.file.addEventListener("change", () => openFile(ui.file.files[0]));
+      ui.hdu.addEventListener("change", () => {
+        const hdu = state.fits.hdus[Number(ui.hdu.value)];
+        ui.planeField.hidden = Number(hdu.header.NAXIS) <= 2; ui.plane.value = 0; loadPlane();
+      });
+      ui.plane.addEventListener("change", loadPlane);
+      for (const control of [ui.nmin, ui.nmax, ui.frac, ui.cmap]) control.addEventListener("change", renderImage);
+      ui.overlay.addEventListener("pointermove", event => {
+        const point = eventPixel(event); state.hover = point;
+        if (point) updateReadout(point, false); else if (state.selected) updateReadout(state.selected, true);
+        drawOverlay();
+      });
+      ui.overlay.addEventListener("pointerleave", () => { state.hover = null; if (state.selected) updateReadout(state.selected, true); drawOverlay(); });
+      ui.overlay.addEventListener("click", event => {
+        const point = eventPixel(event);
+        if (!point) return;
+        state.selected = point; state.hover = null; clearGeometry(); updateReadout(point, true); drawOverlay();
+        setStatus("");
+        setEstimateMessage(`已选中 FITS (${point.x + 1}, ${point.y + 1})。现在点击“估计 Re / q / n”。`);
+      });
+      ui.estimate.addEventListener("click", () => {
+        if (!state.image) return;
+        try {
+          setStatus("");
+          const point = state.selected || state.reference;
+          state.geometry = estimateGeometry(state.image, point.x, point.y, Number(ui.radius.value), state.stats);
+          const g = state.geometry;
+          setText("estimateCenter", `center : [${formatNumber(g.cx + 1, 2)}, ${formatNumber(g.cy + 1, 2)}]`);
+          if (state.wcs) {
+            const scale = pixelScaleAt(state.wcs, g.cx, g.cy, Math.cos(g.theta), Math.sin(g.theta));
+            const pa = positionAngleFromVector(state.wcs, g.cx, g.cy, Math.cos(g.theta), Math.sin(g.theta));
+            setText("estimateRe", `${g.re.toFixed(2)} pix = ${(g.re * scale).toFixed(4)}″`);
+            setText("estimatePA", `${pa.toFixed(2)}°${state.wcs.hasSIP ? "（未含 SIP）" : ""}`);
+          } else {
+            setText("estimateRe", `${g.re.toFixed(2)} pix`); setText("estimatePA", `像素坐标 ${(g.theta / DEG).toFixed(2)}°，无 WCS`);
+          }
+          setText("estimateN", Number.isFinite(g.n) ? `${g.n.toFixed(2)}${g.nLimit ? "（边界）" : ""}` : "—");
+          setText("estimateQ", g.q.toFixed(3)); drawOverlay();
+          setEstimateMessage("估计完成，蓝色实线表示 Re，橙色实线表示当前估计半径。调整估计半径后可以重新估计。", "success");
+        } catch (error) {
+          setStatus(error.message, true);
+          setEstimateMessage(`${error.message} 请把黄色十字点在最亮区域附近，或增大估计半径后重试。`, "error");
+        }
+      });
+      for (const eventName of ["dragenter", "dragover"]) ui.drop.addEventListener(eventName, event => { event.preventDefault(); ui.drop.classList.add("drop-active"); });
+      for (const eventName of ["dragleave", "drop"]) ui.drop.addEventListener(eventName, event => { event.preventDefault(); ui.drop.classList.remove("drop-active"); });
+      ui.drop.addEventListener("drop", event => openFile(event.dataTransfer.files[0]));
+
+      const params = new URLSearchParams(window.location.search);
+      if (params.get("autoload") === "1") {
+        (async () => {
+          try {
+            setStatus("正在载入命令行指定的 FITS…");
+            const response = await fetch("/file", { cache: "no-store" });
+            if (!response.ok) throw new Error(`读取 FITS 失败，HTTP ${response.status}。`);
+            const buffer = await response.arrayBuffer();
+            await openFile(new File([buffer], params.get("name") || "input.fits"));
+          } catch (error) {
+            setStatus(error.message, true);
+          }
+        })();
+      }
+    }
+
+    if (typeof module !== "undefined" && module.exports) {
+      module.exports = { parseFits, readImage, isImageHdu, sigmaClippedStats, normalizeImageValue, seismicColor, createWCS, pixelToSky, skyDeltas, skyOffsets, pixelScaleAt, positionAngleFromVector, localSkyDirections, logGamma, regularizedGammaP, gammaQuantile, sersicConcentration, estimateSersicIndex, estimateGeometry };
+    }
+    if (typeof document !== "undefined") init();
+  })();
+  </script>
+</body>
+</html>
