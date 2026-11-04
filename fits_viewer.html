@@ -54,6 +54,10 @@
     #estimateMessage { margin: 0 0 10px; }
     #estimateMessage.error { color: var(--danger); }
     #estimateMessage.success { color: var(--accent); }
+    #lyricSection { margin-top: 14px; }
+    #lyricSection h3 { margin: 0 0 8px; font-size: 13px; }
+    #lyricOutput { display: block; width: 100%; resize: vertical; border: 1px solid var(--line); border-radius: 6px; background: #11141a; color: var(--text); padding: 8px; font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; }
+    #copyLyricButton { margin-top: 8px; }
     details { color: var(--muted); font-size: 12px; }
     summary { cursor: pointer; color: var(--text); }
     details p { margin: 8px 0 0; }
@@ -112,6 +116,12 @@
           <dt>q = b/a</dt><dd id="estimateQ">—</dd>
           <dt>GalfitS Pa7</dt><dd id="estimatePA">—</dd>
         </dl>
+        <div id="lyricSection" hidden>
+          <h3>可复制到 .lyric 的参数</h3>
+          <textarea id="lyricOutput" rows="6" readonly spellcheck="false"></textarea>
+          <button type="button" id="copyLyricButton">复制参数</button>
+          <p class="hint">默认用于第一个 Profile（Pa），末位 vary 均为 0。假定 lyric 的 R2 使用本图 CRVAL；其他情况请修改前缀或重新计算中心偏移。</p>
+        </div>
         <p class="hint">黄色十字是你选的位置，蓝色实线是 Re，橙色实线是当前估计半径。选点尽量落在星系最亮区域附近。</p>
       </section>
       <details class="panel">
@@ -553,6 +563,38 @@
       return { cx: meanX, cy: meanY, q, theta, re, n: sersic.n, nLimit: sersic.limit, concentration, npix: component.length, threshold, sky, radius };
     }
 
+    function formatLyricNumber(value) {
+      if (!Number.isFinite(value)) throw new Error("lyric 参数必须是有限数值。");
+      if (Object.is(value, -0)) value = 0;
+      const magnitude = Math.abs(value);
+      if (magnitude > 0 && (magnitude < 1e-4 || magnitude >= 1e6)) return value.toExponential(5);
+      return String(Number(value.toFixed(6)));
+    }
+
+    function lyricFitList(value, minimum, maximum, step) {
+      return `[${[value, minimum, maximum, step].map(formatLyricNumber).join(", ")}, 0]`;
+    }
+
+    function makeLyricParameters({ deltaRA, deltaDec, re, n, pa, q, pixelScale, radiusArcsec }) {
+      for (const value of [deltaRA, deltaDec, re, n, pa, q, pixelScale, radiusArcsec]) {
+        if (!Number.isFinite(value)) throw new Error("需要有效的 WCS 和完整估计结果才能生成 lyric 参数。");
+      }
+      if (!(re > 0 && n > 0 && q > 0 && pixelScale > 0 && radiusArcsec > 0)) {
+        throw new Error("估计结果超出可生成 lyric 参数的范围。");
+      }
+      const centerStep = value => Math.abs(value) / 10 || 0.01;
+      const reMinimum = Math.min(re, Math.max(1e-6, 0.3 * pixelScale));
+      const reMaximum = Math.max(radiusArcsec, 2 * re);
+      return [
+        `Pa3) ${lyricFitList(deltaRA, deltaRA - 0.4, deltaRA + 0.4, centerStep(deltaRA))}`,
+        `Pa4) ${lyricFitList(deltaDec, deltaDec - 0.4, deltaDec + 0.4, centerStep(deltaDec))}`,
+        `Pa5) ${lyricFitList(re, reMinimum, reMaximum, re / 10)}`,
+        `Pa6) ${lyricFitList(n, 0.2, 8, n / 10)}`,
+        `Pa7) ${lyricFitList(pa, -180, 180, Math.abs(pa) / 10 || 1)}`,
+        `Pa8) ${lyricFitList(q, Math.min(0.1, q), 1, q / 10)}`
+      ].join("\n");
+    }
+
     function formatNumber(value, digits = 6) { return Number.isFinite(value) ? Number(value).toFixed(digits) : "—"; }
     function formatArcsec(value) {
       if (!Number.isFinite(value)) return "—";
@@ -715,6 +757,7 @@
       function clearGeometry() {
         state.geometry = null;
         for (const id of ["estimateCenter", "estimateRe", "estimateN", "estimateQ", "estimatePA"]) setText(id, "—");
+        byId("lyricOutput").value = ""; byId("lyricSection").hidden = true;
       }
 
       function loadPlane() {
@@ -825,11 +868,22 @@
           state.geometry = estimateGeometry(state.image, point.x, point.y, Number(ui.radius.value), state.stats);
           const g = state.geometry;
           setText("estimateCenter", `center : [${formatNumber(g.cx + 1, 2)}, ${formatNumber(g.cy + 1, 2)}]`);
+          byId("lyricSection").hidden = true;
           if (state.wcs) {
             const scale = pixelScaleAt(state.wcs, g.cx, g.cy, Math.cos(g.theta), Math.sin(g.theta));
             const pa = positionAngleFromVector(state.wcs, g.cx, g.cy, Math.cos(g.theta), Math.sin(g.theta));
-            setText("estimateRe", `${g.re.toFixed(2)} pix = ${(g.re * scale).toFixed(4)}″`);
+            const reArcsec = g.re * scale;
+            setText("estimateRe", `${g.re.toFixed(2)} pix = ${reArcsec.toFixed(4)}″`);
             setText("estimatePA", `${pa.toFixed(2)}°${state.wcs.hasSIP ? "（未含 SIP）" : ""}`);
+            if (Number.isFinite(g.n)) {
+              const centerSky = pixelToSky(state.wcs, g.cx, g.cy);
+              const delta = skyDeltas(state.reference.sky, centerSky);
+              byId("lyricOutput").value = makeLyricParameters({
+                deltaRA: delta.ra, deltaDec: delta.dec, re: reArcsec,
+                n: g.n, pa, q: g.q, pixelScale: scale, radiusArcsec: g.radius * scale
+              });
+              byId("lyricSection").hidden = false;
+            }
           } else {
             setText("estimateRe", `${g.re.toFixed(2)} pix`); setText("estimatePA", `像素坐标 ${(g.theta / DEG).toFixed(2)}°，无 WCS`);
           }
@@ -840,6 +894,19 @@
           setStatus(error.message, true);
           setEstimateMessage(`${error.message} 请把黄色十字点在最亮区域附近，或增大估计半径后重试。`, "error");
         }
+      });
+      byId("copyLyricButton").addEventListener("click", async () => {
+        const output = byId("lyricOutput"), button = byId("copyLyricButton");
+        if (!output.value) return;
+        output.focus(); output.select();
+        let copied = false;
+        if (navigator.clipboard && window.isSecureContext) {
+          try { await navigator.clipboard.writeText(output.value); copied = true; }
+          catch (_) { /* Use the selection fallback below. */ }
+        }
+        if (!copied) copied = document.execCommand("copy");
+        button.textContent = copied ? "已复制" : "请按 Cmd/Ctrl+C";
+        window.setTimeout(() => { button.textContent = "复制参数"; }, 1500);
       });
       for (const eventName of ["dragenter", "dragover"]) ui.drop.addEventListener(eventName, event => { event.preventDefault(); ui.drop.classList.add("drop-active"); });
       for (const eventName of ["dragleave", "drop"]) ui.drop.addEventListener(eventName, event => { event.preventDefault(); ui.drop.classList.remove("drop-active"); });
@@ -862,7 +929,7 @@
     }
 
     if (typeof module !== "undefined" && module.exports) {
-      module.exports = { parseFits, readImage, isImageHdu, sigmaClippedStats, normalizeImageValue, seismicColor, createWCS, pixelToSky, skyDeltas, skyOffsets, pixelScaleAt, positionAngleFromVector, localSkyDirections, logGamma, regularizedGammaP, gammaQuantile, sersicConcentration, estimateSersicIndex, estimateGeometry };
+      module.exports = { parseFits, readImage, isImageHdu, sigmaClippedStats, normalizeImageValue, seismicColor, createWCS, pixelToSky, skyDeltas, skyOffsets, pixelScaleAt, positionAngleFromVector, localSkyDirections, logGamma, regularizedGammaP, gammaQuantile, sersicConcentration, estimateSersicIndex, estimateGeometry, formatLyricNumber, lyricFitList, makeLyricParameters };
     }
     if (typeof document !== "undefined") init();
   })();

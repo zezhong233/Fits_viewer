@@ -211,6 +211,41 @@ test("arcsinh normalization matches anchors and both extended branches", () => {
   assert.ok(Number.isNaN(viewer.normalizeImageValue(NaN, min, max, frac)));
 });
 
+test("lyric export maps estimates to Pa3-Pa8 with bounds and steps", () => {
+  const text = viewer.makeLyricParameters({
+    deltaRA: -0.2,
+    deltaDec: 0.1,
+    re: 0.2,
+    n: 2,
+    pa: 90,
+    q: 0.5,
+    pixelScale: 0.04,
+    radiusArcsec: 1
+  });
+  assert.equal(text, [
+    "Pa3) [-0.2, -0.6, 0.2, 0.02, 0]",
+    "Pa4) [0.1, -0.3, 0.5, 0.01, 0]",
+    "Pa5) [0.2, 0.012, 1, 0.02, 0]",
+    "Pa6) [2, 0.2, 8, 0.2, 0]",
+    "Pa7) [90, -180, 180, 9, 0]",
+    "Pa8) [0.5, 0.1, 1, 0.05, 0]"
+  ].join("\n"));
+  for (const line of text.split("\n")) {
+    const parameters = JSON.parse(line.slice(line.indexOf("[")));
+    assert.equal(parameters.length, 5);
+    assert.equal(parameters[4], 0);
+    assert.ok(parameters[1] <= parameters[0] && parameters[0] <= parameters[2]);
+    assert.ok(parameters[3] > 0);
+  }
+
+  const zeroOffsets = viewer.makeLyricParameters({
+    deltaRA: 0, deltaDec: 0, re: 0.2, n: 2, pa: 0, q: 0.5, pixelScale: 0.04, radiusArcsec: 1
+  }).split("\n");
+  assert.ok(zeroOffsets[0].endsWith("0.01, 0]"));
+  assert.ok(zeroOffsets[1].endsWith("0.01, 0]"));
+  assert.ok(zeroOffsets[4].endsWith("1, 0]"));
+});
+
 test("Sersic concentration inversion recovers n and reports search limits", () => {
   for (const expected of [0.75, 1, 2, 4, 5.5]) {
     const concentration = viewer.sersicConcentration(expected);

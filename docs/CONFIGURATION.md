@@ -133,6 +133,25 @@ alias 和 `PATH` 都能启动命令，按个人习惯选择即可。
 
 这些结果适合目测和拟合初值。它们不是完整二维拟合的结果，未做 PSF 反卷积。有限光圈、噪声、邻近源和中心像素积分都会影响结果，高 Sérsic index 尤其不稳定。显示“边界”时，表示估计已经达到搜索范围的端点。
 
+### 导出到 `.lyric`
+
+有有效 WCS 和完整估计结果时，结果面板会显示六行可复制的参数：
+
+```text
+Pa3) [delta_RA, min, max, step, 0]
+Pa4) [delta_Dec, min, max, step, 0]
+Pa5) [Re_arcsec, min, max, step, 0]
+Pa6) [n, min, max, step, 0]
+Pa7) [PA_deg, min, max, step, 0]
+Pa8) [q, min, max, step, 0]
+```
+
+点击“复制参数”即可复制整段文本。中心偏移使用估计中心相对 CRVAL 的偏移，$\Delta RA$ 不乘 $\cos\delta$，与 GalfitS 的中心坐标转换约定一致。
+
+默认中心偏移范围为估计值前后各 $0.4''$，Re 下限约为 0.3 像素，n 范围为 0.2–8，PA 范围为 −180–180°，q 上限为 1。非零参数的步长为 $|value|/10$；零中心偏移和零 PA 使用备用步长。
+
+文本默认用于第一个 Profile（`Pa`），末位 `vary` 均设为 0。使用其他 Profile 时需要修改前缀。此导出假定 `.lyric` 的 `R2)` 与 FITS 的 CRVAL 相同；如果参考天球坐标不同，需要重新计算 `Pa3)` 和 `Pa4)`。
+
 ## 8. 可选环境变量
 
 ### `FITS_VIEWER_HTML`

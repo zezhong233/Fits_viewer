@@ -10,6 +10,7 @@
 - 根据 FITS WCS 显示参考 RA/Dec、目标像素、相对像素偏移和角度偏移。
 - 显示 North/East 方向箭头，并提供可拖拽的图像区分隔栏。
 - 快速估计椭圆中心、半光半径 Re、轴比 q、GalfitS Pa7 位置角和粗略 Sérsic index。
+- 估计后可一键复制 `Pa3)`–`Pa8)` 参数，粘贴到 GalfitS `.lyric` 配置文件。
 - `fits_viewer file.fits` 可通过一次性本地连接自动载入文件。文件不会上传到外部服务器。
 
 ## 直接从源码运行
