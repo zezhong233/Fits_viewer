@@ -213,8 +213,8 @@ test("arcsinh normalization matches anchors and both extended branches", () => {
 
 test("lyric export maps estimates to Pa3-Pa8 with bounds and steps", () => {
   assert.equal(
-    viewer.lyricFitList(0.063389, -0.336611, 0.463389, 0.0063389),
-    "[0.063389, -0.3, 0.5, 0.006, 0]"
+    viewer.lyricFitList(0.063389, -0.336611, 0.463389),
+    "[0.063389, -0.3, 0.5, 0.08, 0]"
   );
   const text = viewer.makeLyricParameters({
     deltaRA: -0.2,
@@ -227,12 +227,12 @@ test("lyric export maps estimates to Pa3-Pa8 with bounds and steps", () => {
     radiusArcsec: 1
   });
   assert.equal(text, [
-    "Pa3) [-0.2, -0.6, 0.2, 0.02, 0]",
-    "Pa4) [0.1, -0.3, 0.5, 0.01, 0]",
-    "Pa5) [0.2, 0.01, 1, 0.02, 0]",
-    "Pa6) [2, 0.2, 6, 0.2, 0]",
-    "Pa7) [90, -200, 200, 1, 0]",
-    "Pa8) [0.5, 0.1, 1, 0.05, 0]"
+    "Pa3) [-0.2, -0.6, 0.2, 0.08, 0]",
+    "Pa4) [0.1, -0.3, 0.5, 0.08, 0]",
+    "Pa5) [0.2, 0.01, 1, 0.1, 0]",
+    "Pa6) [2, 0.2, 6, 0.6, 0]",
+    "Pa7) [90, -200, 200, 40, 0]",
+    "Pa8) [0.5, 0.1, 1, 0.09, 0]"
   ].join("\n"));
   for (const line of text.split("\n")) {
     const parameters = JSON.parse(line.slice(line.indexOf("[")));
@@ -240,14 +240,15 @@ test("lyric export maps estimates to Pa3-Pa8 with bounds and steps", () => {
     assert.equal(parameters[4], 0);
     assert.ok(parameters[1] <= parameters[0] && parameters[0] <= parameters[2]);
     assert.ok(parameters[3] > 0);
+    assertClose(parameters[3], Number(((parameters[2] - parameters[1]) / 10).toPrecision(1)), 1e-12);
   }
 
   const zeroOffsets = viewer.makeLyricParameters({
     deltaRA: 0, deltaDec: 0, re: 0.2, n: 2, pa: 0, q: 0.5, pixelScale: 0.04, radiusArcsec: 1
   }).split("\n");
-  assert.ok(zeroOffsets[0].endsWith("0.01, 0]"));
-  assert.ok(zeroOffsets[1].endsWith("0.01, 0]"));
-  assert.ok(zeroOffsets[4].endsWith("1, 0]"));
+  assert.ok(zeroOffsets[0].endsWith("0.08, 0]"));
+  assert.ok(zeroOffsets[1].endsWith("0.08, 0]"));
+  assert.ok(zeroOffsets[4].endsWith("40, 0]"));
 });
 
 test("Sersic concentration inversion recovers n and reports search limits", () => {

@@ -576,8 +576,10 @@
       return value === 0 ? 0 : Number(value.toPrecision(1));
     }
 
-    function lyricFitList(value, minimum, maximum, step) {
-      const fields = [value, oneSignificant(minimum), oneSignificant(maximum), oneSignificant(step)];
+    function lyricFitList(value, minimum, maximum) {
+      const lower = oneSignificant(minimum), upper = oneSignificant(maximum);
+      const step = oneSignificant((upper - lower) / 10);
+      const fields = [value, lower, upper, step];
       return `[${fields.map(formatLyricNumber).join(", ")}, 0]`;
     }
 
@@ -588,16 +590,15 @@
       if (!(re > 0 && n > 0 && q > 0 && pixelScale > 0 && radiusArcsec > 0)) {
         throw new Error("估计结果超出可生成 lyric 参数的范围。");
       }
-      const centerStep = value => Math.abs(value) / 10 || 0.01;
       const reMinimum = Math.max(1e-6, Math.min(0.3 * pixelScale, 0.5 * re));
       const reMaximum = Math.max(radiusArcsec, 2 * re);
       return [
-        `Pa3) ${lyricFitList(deltaRA, deltaRA - 0.4, deltaRA + 0.4, centerStep(deltaRA))}`,
-        `Pa4) ${lyricFitList(deltaDec, deltaDec - 0.4, deltaDec + 0.4, centerStep(deltaDec))}`,
-        `Pa5) ${lyricFitList(re, reMinimum, reMaximum, re / 10)}`,
-        `Pa6) ${lyricFitList(n, 0.2, 6, n / 10)}`,
-        `Pa7) ${lyricFitList(pa, -180, 180, 1)}`,
-        `Pa8) ${lyricFitList(q, Math.min(0.1, 0.5 * q), 1, q / 10)}`
+        `Pa3) ${lyricFitList(deltaRA, deltaRA - 0.4, deltaRA + 0.4)}`,
+        `Pa4) ${lyricFitList(deltaDec, deltaDec - 0.4, deltaDec + 0.4)}`,
+        `Pa5) ${lyricFitList(re, reMinimum, reMaximum)}`,
+        `Pa6) ${lyricFitList(n, 0.2, 6)}`,
+        `Pa7) ${lyricFitList(pa, -180, 180)}`,
+        `Pa8) ${lyricFitList(q, Math.min(0.1, 0.5 * q), 1)}`
       ].join("\n");
     }
 
