@@ -214,7 +214,7 @@ test("arcsinh normalization matches anchors and both extended branches", () => {
 test("lyric export maps estimates to Pa3-Pa8 with bounds and steps", () => {
   assert.equal(
     viewer.lyricFitList(0.063389, -0.336611, 0.463389),
-    "[0.063389, -0.3, 0.5, 0.08, 0]"
+    "[0.063, -0.3, 0.5, 0.08, 0]"
   );
   const text = viewer.makeLyricParameters({
     deltaRA: -0.2,

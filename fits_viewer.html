@@ -577,9 +577,10 @@
     }
 
     function lyricFitList(value, minimum, maximum) {
+      const initial = Number(value.toPrecision(2));
       const lower = oneSignificant(minimum), upper = oneSignificant(maximum);
       const step = oneSignificant((upper - lower) / 10);
-      const fields = [value, lower, upper, step];
+      const fields = [initial, lower, upper, step];
       return `[${fields.map(formatLyricNumber).join(", ")}, 0]`;
     }
 
